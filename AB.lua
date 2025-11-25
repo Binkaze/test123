@@ -1,7 +1,7 @@
 --[[
 	Universal Aimbot Module by Exunys © CC0 1.0 Universal (2023 - 2024)
 	https://github.com/Exunys
-	Modified with Movement Prediction + Dynamic Part Targeting
+	Modified with Movement Prediction
 ]]
 
 --// Cache
@@ -41,15 +41,12 @@ local GetPlayers = __index(Players, "GetPlayers")
 local RequiredDistance, Typing, Running, ServiceConnections, Animation, OriginalSensitivity = 2000, false, false, {}
 local Connect, Disconnect = __index(game, "DescendantAdded").Connect
 
--- 타겟 가능한 부위 목록 (Head 우선순위 높음)
-local TargetParts = {"Head", "UpperTorso", "LowerTorso", "LeftUpperArm", "RightUpperArm", "LeftLowerArm", "RightLowerArm", "LeftUpperLeg", "RightUpperLeg", "LeftLowerLeg", "RightLowerLeg"}
-
 --// Checking for multiple processes
 if ExunysDeveloperAimbot and ExunysDeveloperAimbot.Exit then
 	ExunysDeveloperAimbot:Exit()
 end
 
---// Environment (다중 부위 + 예측 설정)
+--// Environment (예측 설정 추가)
 getgenv().ExunysDeveloperAimbot = {
 	DeveloperSettings = {
 		UpdateMode = "RenderStepped",
@@ -64,13 +61,12 @@ getgenv().ExunysDeveloperAimbot = {
 		WallCheck = false,
 		OffsetToMoveDirection = false,
 		OffsetIncrement = 15,
-		PredictMovement = true,
-		PredictionFactor = 0.13,
-		DynamicTargeting = true,     -- 새로 추가: 동적 부위 선택 활성화
+		PredictMovement = true,      -- 새로 추가: Velocity 예측 활성화
+		PredictionFactor = 0.13,     -- 새로 추가: 예측 강도 (0.1~0.2 추천)
 		Sensitivity = 0,
 		Sensitivity2 = 3.5,
 		LockMode = 1,
-		LockPart = "Head",           -- 기본값, 실제로는 동적으로 변경
+		LockPart = "Head",
 		TriggerKey = Enum.UserInputType.MouseButton2,
 		Toggle = false
 	},
@@ -119,27 +115,8 @@ local ConvertVector = function(Vector)
 	return Vector2new(Vector.X, Vector.Y)
 end
 
--- 가장 가까운 부위 찾기 (새로 추가)
-local GetClosestPart = function(Character, MousePos)
-	local ClosestPart, ClosestDist = nil, RequiredDistance
-	for _, PartName in next, TargetParts do
-		local Part = FindFirstChild(Character, PartName)
-		if Part then
-			local ScreenPos, OnScreen = WorldToViewportPoint(Camera, Part.Position)
-			if OnScreen then
-				local Dist = (MousePos - ConvertVector(ScreenPos)).Magnitude
-				if Dist < ClosestDist then
-					ClosestDist, ClosestPart = Dist, Part
-				end
-			end
-		end
-	end
-	return ClosestPart
-end
-
 local CancelLock = function()
 	Environment.Locked = nil
-	Environment.LockedPart = nil
 	local FOVCircle = Environment.FOVCircle
 	setrenderproperty(FOVCircle, "Color", Environment.FOVSettings.Color)
 	__newindex(UserInputService, "MouseDeltaSensitivity", OriginalSensitivity)
@@ -148,42 +125,32 @@ end
 
 local GetClosestPlayer = function()
 	local Settings = Environment.Settings
-	local MousePos = GetMouseLocation(UserInputService)
+	local LockPart = Settings.LockPart
 
 	if not Environment.Locked then
 		RequiredDistance = Environment.FOVSettings.Enabled and Environment.FOVSettings.Radius or 2000
 		for _, Value in next, GetPlayers(Players) do
 			local Character = __index(Value, "Character")
 			local Humanoid = Character and FindFirstChildOfClass(Character, "Humanoid")
-			if Value ~= LocalPlayer and not tablefind(Environment.Blacklisted, __index(Value, "Name")) and Character and Humanoid then
-				-- 동적 타겟팅: 가장 가까운 부위 확인
-				local ClosestPart = GetClosestPart(Character, MousePos)
-				if not ClosestPart then continue end
-
-				local PartPosition, TeamCheckOption = ClosestPart.Position, Environment.DeveloperSettings.TeamCheckOption
+			if Value ~= LocalPlayer and not tablefind(Environment.Blacklisted, __index(Value, "Name")) and Character and FindFirstChild(Character, LockPart) and Humanoid then
+				local PartPosition, TeamCheckOption = __index(Character[LockPart], "Position"), Environment.DeveloperSettings.TeamCheckOption
 				if Settings.TeamCheck and __index(Value, TeamCheckOption) == __index(LocalPlayer, TeamCheckOption) then continue end
 				if Settings.AliveCheck and __index(Humanoid, "Health") <= 0 then continue end
 				if Settings.WallCheck then
 					local BlacklistTable = GetDescendants(__index(LocalPlayer, "Character"))
-					for _, p in next, GetDescendants(Character) do BlacklistTable[#BlacklistTable + 1] = p end
+					for _, Value in next, GetDescendants(Character) do BlacklistTable[#BlacklistTable + 1] = Value end
 					if #GetPartsObscuringTarget(Camera, {PartPosition}, BlacklistTable) > 0 then continue end
 				end
 				local Vector, OnScreen, Distance = WorldToViewportPoint(Camera, PartPosition)
 				Vector = ConvertVector(Vector)
-				Distance = (MousePos - Vector).Magnitude
-				if Distance < RequiredDistance then
-					RequiredDistance = Distance
-					Environment.Locked = Value
-					Environment.LockedPart = ClosestPart  -- 락된 부위 저장
+				Distance = (GetMouseLocation(UserInputService) - Vector).Magnitude
+				if Distance < RequiredDistance and OnScreen then
+					RequiredDistance, Environment.Locked = Distance, Value
 				end
 			end
 		end
-	elseif Environment.Locked then
-		local Character = Environment.Locked.Character
-		local CurrentClosest = GetClosestPart(Character, MousePos)
-		if not CurrentClosest or (MousePos - ConvertVector(WorldToViewportPoint(Camera, CurrentClosest.Position))).Magnitude > RequiredDistance then
-			CancelLock()
-		end
+	elseif (GetMouseLocation(UserInputService) - ConvertVector(WorldToViewportPoint(Camera, __index(__index(__index(Environment.Locked, "Character"), LockPart), "Position")))).Magnitude > RequiredDistance then
+		CancelLock()
 	end
 end
 
@@ -192,7 +159,7 @@ local Load = function()
 	local Settings, FOVCircle, FOVCircleOutline, FOVSettings = Environment.Settings, Environment.FOVCircle, Environment.FOVCircleOutline, Environment.FOVSettings
 
 	ServiceConnections.RenderSteppedConnection = Connect(__index(RunService, Environment.DeveloperSettings.UpdateMode), function()
-		local OffsetToMoveDirection, PredictMovement, PredictionFactor = Settings.OffsetToMoveDirection, Settings.PredictMovement, Settings.PredictionFactor
+		local OffsetToMoveDirection, LockPart, PredictMovement, PredictionFactor = Settings.OffsetToMoveDirection, Settings.LockPart, Settings.PredictMovement, Settings.PredictionFactor
 
 		if FOVSettings.Enabled and Settings.Enabled then
 			for Index, Value in next, FOVSettings do
@@ -215,34 +182,30 @@ local Load = function()
 		if Running and Settings.Enabled then
 			GetClosestPlayer()
 			
-			if Environment.Locked and Environment.LockedPart then
+			local Offset = Vector3zero
+			if Environment.Locked then
 				local Character = Environment.Locked.Character
+				local LockPartObj = Character[LockPart]
 				local HRP = Character:FindFirstChild("HumanoidRootPart")
-				local CurrentPos = Environment.LockedPart.Position
+				local CurrentPos = LockPartObj.Position
 				
-				-- 실시간 부위 업데이트
-				Environment.LockedPart = GetClosestPart(Character, GetMouseLocation(UserInputService))
-				if not Environment.LockedPart then Environment.LockedPart = Character:FindFirstChild("Head") or Character:FindFirstChild("UpperTorso") end
-				CurrentPos = Environment.LockedPart.Position
-				
-				-- 움직임 예측
+				-- 움직임 예측 계산 (새로 추가)
 				local PredictedPos = CurrentPos
 				if PredictMovement and HRP then
 					local Velocity = HRP.Velocity
 					PredictedPos = CurrentPos + (Velocity * PredictionFactor)
 				elseif OffsetToMoveDirection and HRP then
-					local Humanoid = FindFirstChildOfClass(Character, "Humanoid")
-					local Offset = __index(Humanoid, "MoveDirection") * (mathclamp(Settings.OffsetIncrement, 1, 30) / 10)
+					Offset = __index(FindFirstChildOfClass(Character, "Humanoid"), "MoveDirection") * (mathclamp(Settings.OffsetIncrement, 1, 30) / 10)
 					PredictedPos = CurrentPos + Offset
 				end
 				
 				local LockedPosition = WorldToViewportPoint(Camera, PredictedPos)
 				
-				if Settings.LockMode == 2 then
+				if Environment.Settings.LockMode == 2 then
 					mousemoverel((LockedPosition.X - GetMouseLocation(UserInputService).X) / Settings.Sensitivity2, (LockedPosition.Y - GetMouseLocation(UserInputService).Y) / Settings.Sensitivity2)
 				else
 					if Settings.Sensitivity > 0 then
-						Animation = TweenService:Create(Camera, TweenInfonew(Settings.Sensitivity, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = CFramenew(Camera.CFrame.Position, PredictedPos)})
+						Animation = TweenService:Create(Camera, TweenInfonew(Environment.Settings.Sensitivity, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = CFramenew(Camera.CFrame.Position, PredictedPos)})
 						Animation:Play()
 					else
 						__newindex(Camera, "CFrame", CFramenew(Camera.CFrame.Position, PredictedPos))
@@ -257,7 +220,7 @@ local Load = function()
 	ServiceConnections.InputBeganConnection = Connect(__index(UserInputService, "InputBegan"), function(Input)
 		local TriggerKey, Toggle = Settings.TriggerKey, Settings.Toggle
 		if Typing then return end
-		if (Input.UserInputType == Enum.UserInputType.Keyboard and Input.KeyCode == TriggerKey) or Input.UserInputType == TriggerKey then
+		if Input.UserInputType == Enum.UserInputType.Keyboard and Input.KeyCode == TriggerKey or Input.UserInputType == TriggerKey then
 			if Toggle then
 				Running = not Running
 				if not Running then CancelLock() end
@@ -270,7 +233,7 @@ local Load = function()
 	ServiceConnections.InputEndedConnection = Connect(__index(UserInputService, "InputEnded"), function(Input)
 		local TriggerKey, Toggle = Settings.TriggerKey, Settings.Toggle
 		if Toggle or Typing then return end
-		if (Input.UserInputType == Enum.UserInputType.Keyboard and Input.KeyCode == TriggerKey) or Input.UserInputType == TriggerKey then
+		if Input.UserInputType == Enum.UserInputType.Keyboard and Input.KeyCode == TriggerKey or Input.UserInputType == TriggerKey then
 			Running = false
 			CancelLock()
 		end
@@ -281,7 +244,7 @@ end
 ServiceConnections.TypingStartedConnection = Connect(__index(UserInputService, "TextBoxFocused"), function() Typing = true end)
 ServiceConnections.TypingEndedConnection = Connect(__index(UserInputService, "TextBoxFocusReleased"), function() Typing = false end)
 
---// Methods
+--// Methods (기존과 동일)
 function Environment.Exit(self)
 	assert(self, "EXUNYS_AIMBOT-V3.Exit: Missing parameter #1 \"self\".")
 	for Index, _ in next, ServiceConnections do Disconnect(ServiceConnections[Index]) end
@@ -293,7 +256,7 @@ end
 function Environment.Restart() for Index, _ in next, ServiceConnections do Disconnect(ServiceConnections[Index]) end Load() end
 function Environment.Blacklist(self, Username) Username = FixUsername(Username) assert(Username, "User not found.") self.Blacklisted[#self.Blacklisted + 1] = Username end
 function Environment.Whitelist(self, Username) local Index = tablefind(self.Blacklisted, FixUsername(Username)) if Index then tableremove(self.Blacklisted, Index) end end
-function Environment.GetClosestPlayer() GetClosestPlayer() local Value, Part = Environment.Locked, Environment.LockedPart CancelLock() return Value, Part end
+function Environment.GetClosestPlayer() GetClosestPlayer() local Value = Environment.Locked CancelLock() return Value end
 
 Environment.Load = Load
 setmetatable(Environment, {__call = Load})
